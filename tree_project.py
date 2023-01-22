@@ -14,6 +14,7 @@ documentation is important. You're also encouraged to make notes of
 potential problems and future improvements.
 """
 
+import threading
 from typing import *
 from abc import ABC, abstractmethod
 
@@ -75,57 +76,53 @@ class TreeNode(ABC):
 
 
 import wx
-import threading
-
 class TreeCtrl(wx.TreeCtrl):
+    "Extends wx.TreeCtrl to use TreeNode as data model"
     def __init__(self, root: TreeNode, parent: wx.Window):
         self._lock = threading.Lock()
         self._nodes_map = {}
         self._tree_item_map = {}
-        # ...
-        
-    def populate_tree(self, root: TreeNode):
+        super().__init__(parent, style=wx.TR_DEFAULT_STYLE)
+        self.Bind(wx.EVT_TREE_ITEM_EXPANDED, self.on_item_expand)
+        self.Bind(wx.EVT_TREE_ITEM_COLLAPSED, self.on_item_collapse)
+        root.tree_label.add_observer(self.on_label_change)
+        root.tree_children_change.add_observer(self.on_children_change)
+        self._nodes_map[root] = self.AddRoot(root.tree_label.get())
+        self._tree_item_map[self._nodes_map[root]] = root
+
+    def on_item_expand(self, event: wx.TreeEvent):
         with self._lock:
-            try:
-                item_id = self.AddRoot(root.tree_label.get())
-                self._nodes_map[item_id] = root
-                root.tree_label.add_observer(self.on_label_change)
-                root.tree_children_change.add_observer(self.on_children_change)
-                self._tree_item_map[root.tree_label] = item_id
-                if not root.is_tree_leaf():
-                    self.SetItemHasChildren(item_id)
-            except Exception as e:
-                print(f"Error: {e}")
+            item = event.GetItem()
+            node = self._tree_item_map.get(item)
+            if node and not node.is_tree_leaf():
+                self._populate_children(item, node)
+
+    def on_item_collapse(self, event: wx.TreeEvent):
+        with self._lock:
+            item = event.GetItem()
+            if item in self._tree_item_map:
+                self.DeleteChildren(item)
+
+    def on_children_change(self, node: TreeNode):
+        with self._lock:
+            item = self._nodes_map.get(node)
+            if item and self.IsExpanded(item):
+                self.DeleteChildren(item)
+                self._populate_children(item, node)            
+
+    def on_label_change(self, node: TreeNode):
+        with self._lock:
+            item = self._nodes_map.get(node)
+            if item:
+                self.SetItemText(item, node.tree_label.get())
+
     
-    def on_item_expand(self, event):
-        with self._lock:
-            try:
-                item_id = event.GetItem()
-                node = self._nodes_map[item_id]
-                if not node.is_tree_leaf():
-                    for child in node.get_tree_children():
-                        child_item = self.AppendItem(item_id, child.tree_label.get())
-                        self._nodes_map[child_item] = child
-                        child.tree_label.add_observer(self.on_label_change)
-                        child.tree_children_change.add_observer(self.on_children_change)
-                        self._tree_item_map[child.tree_label] = child_item
-                        if not child.is_tree_leaf():
-                            self.SetItemHasChildren(child_item)
-            except Exception as e:
-                print(f"Error: {e}")
-                
-    def on_item_collapse(self, event):
-        with self._lock:
-            try:
-                item_id = event.GetItem()
-                node = self._nodes_map[item_id]
-                if not node.is_tree_leaf():
-                    for child in node.get_tree_children():
-                        child_item = self.GetFirstChild(item_id)[0]
-                        self.Delete(child_item)
-                        child.tree_label.remove_observer(self.on_label_change)
-                        child.tree_children_change.remove_observer(self.on_children_change)
-                        del self._tree_item_map[child.tree_label]
-            except Exception as e:
-                print(f"Error: {e}")
+
+    def _populate_children(self, item: wx.TreeItemId, node: TreeNode):
+        for child_node in node.get_tree_children():
+            child_item = self.AppendItem(item, child_node.tree_label.get())
+            self._nodes_map[child_node] = child_item
+            self._tree_item_map[child_item] = child_node
+            child_node.tree_label.add_observer(self.on_label_change)
+            child_node.tree_children_change.add_observer(self.on_children_change)
 
