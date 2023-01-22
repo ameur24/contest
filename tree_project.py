@@ -79,44 +79,43 @@ import wx
 class TreeCtrl(wx.TreeCtrl):
     "Extends wx.TreeCtrl to use TreeNode as data model"
     def __init__(self, root: TreeNode, parent: wx.Window):
+        super().__init__(parent)
         self._lock = threading.Lock()
-        self._nodes_map = {}
-        self._tree_item_map = {}
-        super().__init__(parent, style=wx.TR_DEFAULT_STYLE)
+        self._nodes_map = {}  # maps nodes to tree items
+        self._tree_item_map = {}  # maps tree items to nodes
+        self._root = root
+        self._root_item = self.AddRoot(root.tree_label.get())
+        self._nodes_map[root] = self._root_item
+        self._tree_item_map[self._root_item] = root
         self.Bind(wx.EVT_TREE_ITEM_EXPANDED, self.on_item_expand)
         self.Bind(wx.EVT_TREE_ITEM_COLLAPSED, self.on_item_collapse)
         root.tree_label.add_observer(self.on_label_change)
         root.tree_children_change.add_observer(self.on_children_change)
-        self._nodes_map[root] = self.AddRoot(root.tree_label.get())
-        self._tree_item_map[self._nodes_map[root]] = root
 
-    def on_item_expand(self, event: wx.TreeEvent):
+    def on_item_expand(self, event):
+        item = event.GetItem()
+        node = self._tree_item_map[item]
+        self._populate_children(item, node)
+
+    def on_item_collapse(self, event):
+        item = event.GetItem()
+        self.DeleteChildren(item)
+
+    def on_children_change(self):
         with self._lock:
-            item = event.GetItem()
-            node = self._tree_item_map.get(item)
-            if node and not node.is_tree_leaf():
-                self._populate_children(item, node)
+            for node, item in self._nodes_map.items():
+                if item and self.IsExpanded(item):
+                    self.DeleteChildren(item)
+                    self._populate_children(item, node)
 
-    def on_item_collapse(self, event: wx.TreeEvent):
+
+    def on_label_change(self):
         with self._lock:
-            item = event.GetItem()
-            if item in self._tree_item_map:
-                self.DeleteChildren(item)
+            for node, item in self._nodes_map.items():
+                if item:
+                    self.SetItemText(item, node.tree_label.get())
 
-    def on_children_change(self, node: TreeNode):
-        with self._lock:
-            item = self._nodes_map.get(node)
-            if item and self.IsExpanded(item):
-                self.DeleteChildren(item)
-                self._populate_children(item, node)            
 
-    def on_label_change(self, node: TreeNode):
-        with self._lock:
-            item = self._nodes_map.get(node)
-            if item:
-                self.SetItemText(item, node.tree_label.get())
-
-    
 
     def _populate_children(self, item: wx.TreeItemId, node: TreeNode):
         for child_node in node.get_tree_children():
@@ -125,4 +124,3 @@ class TreeCtrl(wx.TreeCtrl):
             self._tree_item_map[child_item] = child_node
             child_node.tree_label.add_observer(self.on_label_change)
             child_node.tree_children_change.add_observer(self.on_children_change)
-
